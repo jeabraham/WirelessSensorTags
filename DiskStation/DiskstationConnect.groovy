@@ -242,6 +242,7 @@ def getCameraCapabilities() {
 
 // takes in object from state.SSCameraList
 def updateCameraInfo(camera) {
+	log.trace "Updating camera info for Camera ID " + camera.id
     def vendor = camera.additional.device.vendor.replaceAll(" ", "%20")
     def model = camera.additional.device.model.replaceAll(" ", "%20")
     if ((model == "Define") && (vendor = "User")) {
@@ -259,7 +260,6 @@ def updateCameraInfo(camera) {
     	// standard camera
         //queueDiskstationCommand("SYNO.SurveillanceStation.Camera", "GetCapability", "vendor=${vendor}&model=${model}", 1)
         queueDiskstationCommand("SYNO.SurveillanceStation.Camera", "GetCapabilityByCamId", "cameraId=${camera.id}", 4)
-
         queueDiskstationCommand("SYNO.SurveillanceStation.PTZ", "ListPreset", "cameraId=${camera.id}", 1)    
         queueDiskstationCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol", "cameraId=${camera.id}", 1)
     }
@@ -298,6 +298,8 @@ def finalizeChildCommand(commandInfo) {
 	state.lastEventTime = commandInfo.time
 }
 
+// Guess what child issued the command.  Use the one that has the oldest unfinished takeImage event.
+// This unreliable in enviroments with many cameras set to AutoTake
 def getFirstChildCommand(commandType) {
 	def commandInfo = null
     
@@ -311,7 +313,6 @@ def getFirstChildCommand(commandType) {
     
     if (searchType != null) {
         def children = getChildDevices()
-        def bestTime = now()
         def startTime = now() - 40000
         
         if (state.lastEventTime != null) {
@@ -321,6 +322,8 @@ def getFirstChildCommand(commandType) {
         }
         
         //log.trace "startTime = ${startTime}, now = ${now()}"
+
+        def bestTime = now()
 
         children.each {
             // get the events from the child
@@ -345,6 +348,8 @@ def getFirstChildCommand(commandType) {
     }
     return commandInfo
 }
+
+
 
 /////////////////////////////////////
 
@@ -396,12 +401,18 @@ def doesCommandReturnData(uniqueCommand) {
 
 // this process is overly complex handling async events from one IP
 // would be much better synchronous and not having to track / guess where things are coming from
+// The event argument doesn't include any way to link it back to a particular hubAction request.
 def locationHandler(evt) {
+
+	//log.trace "String value: " + evt.stringValue
+
 	def description = evt.description
 	def hub = evt?.hubId
 
 	def parsedEvent = parseEventMessage(description)
 	parsedEvent << ["hub":hub]   
+    
+    log.trace "Parsed event keys: " + parsedEvent.keySet()
         
     if ((parsedEvent.ip == convertIPtoHex(userip)) && (parsedEvent.port == convertPortToHex(userport)))
     {
@@ -547,7 +558,7 @@ def locationHandler(evt) {
         if (commandType != "") {
         	log.trace "event = ${description}"
         
-            // see who wants this type (commandType)        
+            // guess who wants this type (commandType)        
             def commandInfo = getFirstChildCommand(commandType)
 
             if (commandInfo != null) {
@@ -860,7 +871,8 @@ def createHubAction(Map commandData) {
 
             def hubaction = new physicalgraph.device.HubAction(
                 """GET ${url} HTTP/1.1\r\nHOST: ${ip}\r\nAccept: ${acceptType}\r\n\r\n""", 
-                physicalgraph.device.Protocol.LAN, "${deviceNetworkId}")
+                physicalgraph.device.Protocol.LAN, "${deviceNetworkId}") //, [callback: testHandler]) <-- the callback doesn't work              
+                
             if (getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot") == getUniqueCommand(commandData)) {
             	if (state.doSnapshotResend) {
                 	state.doSnapshotResend = false
@@ -902,6 +914,7 @@ def createCommandData(String api, String command, String params, int version) {
 }
 
 def queueDiskstationCommand(String api, String command, String params, int version) {
+    log.trace "queing command " + command
     
     def commandData = createCommandData(api, command, params, version)
     
@@ -949,7 +962,7 @@ def webNotifyCallback() {
         log.debug "Test message received"
     }
     
-    // Camera Foscam1 on DiskStation has detected motion
+    // The SMS message should be of the form "Camera Foscam1 on DiskStation has detected motion"
     def motionMatch = (params?.msg =~ /Camera (.*) on (.*) has detected motion/)
     if (motionMatch) {
         def thisCamera = state.SSCameraList.find { it.name.toString() == motionMatch[0][1].toString() }
@@ -959,15 +972,18 @@ def webNotifyCallback() {
                 if ((state.lastMotion[cameraDNI] == null) || ((now() - state.lastMotion[cameraDNI]) > 1000)) {
                     state.lastMotion[cameraDNI] = now()
                     
+                    // Only activate or take an image if the camera is not yet activated.
                     def d = getChildDevice(cameraDNI)
                     if (d && d.currentValue("motion") == "inactive") {
-                        log.trace "motion on child device: " + d
+                        log.trace "Motion detected on " + d
                         d.motionActivated()
                         if (d.currentValue("autoTake") == "on") {
-                            log.trace "taking motion image for child"
+                            log.trace "AutoTake is on. Taking image for " + d 
                             d.take()
                         }
-                        handleMotion()
+                        doAndScheduleHandleMotion()
+                    } else {
+                    	log.trace "Doing nothing. Motion event received for " + d + " which is already active."
                     }
                 }
             }
@@ -975,6 +991,36 @@ def webNotifyCallback() {
     }
 }
 
+// runIn appears to be unreliable. For backup, schedule a cleanup every 5 minutes
+def doAndScheduleHandleMotion() {
+	handleMotionCleanup()
+    // This orverwrites any other scheduled event.  We'll only get one extra call to handleMotion this way.
+	runEvery5Minutes( "handleMotionCleanup" )
+}
+
+// Deactivate the cameras is the motion event is old.  Runs itself again in the least time left.
+def handleMotionCleanup() {
+	def children = getChildDevices()
+    def nextTimeDefault = 120000; //1000000
+    def nextTime = nextTimeDefault;
+    log.debug "handleMotionCleanup"
+    
+    children.each {
+    	def newTime = checkMotionDeactivate(it)
+        if ((newTime != null) && (newTime < nextTime)) {
+        	nextTime = newTime
+        }
+    }
+
+	//log.debug "handleMotion nextTime = ${nextTime}"
+	if (nextTime != nextTimeDefault){
+    	log.trace "nextTime = " + nextTime
+        nextTime = (nextTime >= 25) ? nextTime : 25
+		runIn((nextTime+5).toInteger(), "handleMotionCleanup")
+    }
+}
+
+// Determines the time remaining before deactivation for a camera and deactivates if it is up.
 def checkMotionDeactivate(child) {
 	def timeRemaining = null
     def cameraDNI = child.deviceNetworkId
@@ -987,6 +1033,7 @@ def checkMotionDeactivate(child) {
         }
     }
     catch (Exception err) {
+    	log.error(err)
     	timeRemaining = 0
     }
     
@@ -1002,25 +1049,6 @@ def checkMotionDeactivate(child) {
     return timeRemaining
 }
 
-def handleMotion() {
-	def children = getChildDevices()
-    def nextTime = 1000000;
-    log.debug "handleMotion"
-    
-    children.each {
-    	def newTime = checkMotionDeactivate(it)
-        if ((newTime != null) && (newTime < nextTime)) {
-        	nextTime = newTime
-        }
-    }
-
-	log.debug "handleMotion nextTime = ${nextTime}"
-	if ((nextTime != 1000000)){
-    	log.trace "nextTime = " + nextTime
-        nextTime = (nextTime >= 25) ? nextTime : 25
-		runIn((nextTime+5).toInteger(), "handleMotion")
-    }
-}
 
 /////////CHILD DEVICE METHODS
 
