@@ -1,5 +1,5 @@
 /**
- *  Diskstation (Connect)
+ *  Diskstation Camera
  *
  *  Copyright 2014 David Swanson
  *
@@ -13,1206 +13,484 @@
  *  for the specific language governing permissions and limitations under the License.
  *
  */
- 
-definition(
-    name: "Diskstation (Connect)",
-    namespace: "swanny",
-    author: "swanny", "asmuts"
-    description: "Allows you to connect the cameras from the Synology Surveilence Station",
-    category: "Safety & Security",
-    iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
-    iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png"
-)
-
-preferences {
-	page(name:"diskstationDiscovery", title:"Connect with your Diskstation!", content:"diskstationDiscovery")
-	page(name:"cameraDiscovery", title:"Camera Setup", content:"cameraDiscovery", refreshTimeout:5)
-    page(name:"motionSetup", title:"Motion Detection Triggers", content:"motionSetup", refreshTimeout:3)
-}
-
-mappings {
-  path("/DSNotify") {
-    action: [
-      GET: "webNotifyCallback"
-    ]
-  }
-}
-
-//PAGES
-/////////////////////////////////////
-
-def motionSetup()
-{   
-   	// check for timeout error
-    state.refreshCountMotion = state.refreshCountMotion+1
-    if (state.refreshCountMotion > 10) {} 
-    def interval = (state.refreshCountMotion < 4) ? 10 : 5
-    
-    if (!state.accessToken) {
-    	createAccessToken() 
-    }
-
-	def url = apiServerUrl("/api/token/${state.accessToken}/smartapps/installations/${app.id}/DSNotify?user=user&password=pass&to=num&msg=Hello+World")
-    
-    if (state.motionTested == false) {    
-        return dynamicPage(name:"motionSetup", title:"Motion Detection Triggers", nextPage:"", refreshInterval:interval, install: true, uninstall: true){        
-            section("Overview") {
-                paragraph "Motion detected by the cameras can be used as triggers to other ST devices. This step is not required " + 
-                		  "to use the rest of the features of this SmartApp. Click 'Done' if you don't want to set up motion detection " + 
-                          "or continue below to set it up."
-            } 
-            section("Diskstation Setup") {
-                paragraph "Follow these steps to set up motion notifications from Surveillance Station. "
-                paragraph "1. Log into your Diskstation and go to Surveillance Station"
-                paragraph "2. Choose Notifications from the Menu"
-                paragraph "3. Go to the SMS tab. Enable SMS notifications. Note that this setup will not actually send " + 
-                          "SMS messages but instead overrides the SMS system to call a web link for this SmartApp."
-                paragraph "4. Click 'Add SMS Service Provider'"
-                paragraph "5. Copy the text entry field below and past into the SMS URL field"                
-                input "ignore", "text", title:"Web address to copy:", defaultValue:"${url}"
-                paragraph "6. Name your service provider something like 'Smartthings'" 
-                paragraph "7. Click next"
-                paragraph "8. In the drop downs, choose 'Username', 'Password', 'Phone Number' and 'Message Content' in order"
-                paragraph "9. Press Finish"
-                paragraph "10. Type 'user' for the Username, 'password' in both Password fields"
-                paragraph "11. Type 123-4567890 for the first phone number"
-                paragraph "12. Press 'Send a test SMS message' to update this screen"
-                paragraph "13. Now click on the Settings tab in the Nofications window"
-                paragraph "14. Go to the Camera section of this pane and then check SMS for Motion Detected"
-                paragraph "15. With the Motion Detected row highlighted, choose Edit and then Edit Notification from the top left of this pane"
-                paragraph "16. Put the following text into the Subject line and choose Save"
-                input "ignore2", "text", title:"", defaultValue:"Camera %CAMERA% on %SS_PKG_NAME% has detected motion"
-                paragraph "If the page does not say 'success' within 10-15 seconds after sending the test message, " +
-                		  "go to the previous page and come back to refresh the screen again. If you still don't have " +
-                          "the success message, retrace these steps."
-            }
-            section("Optional Settings", hidden: true, hideable: true) {
-            	input "motionOffDelay", "number", title:"Minutes with no message before motion is deactivated:", defaultValue:1
-            } 
-        }
-    } else {
-    	return dynamicPage(name:"motionSetup", title:"Motion Detection Triggers", nextPage:"", install: true, uninstall: true){        
-            section("Success!") {
-            	paragraph "The test message was received from the DiskStation. " + 
-                "Motion detected by the cameras can now be used as triggers to other ST devices."
-            } 
-        }
-    }
-}
-
-
-def diskstationDiscovery()
-{
-    log.trace "subscribe to location"
-    subscribe(location, null, locationHandler, [filterEvents:false])
-    state.subscribe = true
-
-    state.commandList = new LinkedList()
-    
-    // clear the refresh count for the next page
-    state.refreshCount = 0
-    state.motionTested = false
-    // just default to get new info even though we have some logic later to see if IP has changed, this is more robust    
-    state.getDSinfo = true		
-    
-    return dynamicPage(name:"diskstationDiscovery", title:"Connect with your Diskstation!", nextPage:"cameraDiscovery", uninstall: true){
-        section("Please enter your local network DiskStation information:") {
-            input "userip", "text", title:"ip address", defaultValue:"192.168.1.99"
-            input "userport", "text", title:"http port", defaultValue:"5000"
-        } 
-        section("Please enter your DiskStation login information:") {
-            input "username", "text", title:"username", defaultValue:""
-            input "password", "password", title:"password", defaultValue:""
-        }
-    }
-}
-
-def cameraDiscovery()
-{   
-    if(!state.subscribe) {
-        log.trace "subscribe to location"
-        subscribe(location, null, locationHandler, [filterEvents:false])
-        state.subscribe = true
-    }
-    
-    // see if we need to reprocess the DS info
-    if ((userip != state.previoususerip) || (userport != state.previoususerport)) {
-    	log.trace "force refresh of DS info"
-    	state.previoususerip = userip
-        state.previoususerport = userport
-        state.getDSinfo = true
-    }
-    
-    if ((state.getDSinfo == true) || state.getDSinfo == null) {
-		getDSInfo()
-    }
-    
-    //if (state.getCameraCapabilities) {    	
-	//	getCameraCapabilities()
-    //}
-
-	// check for timeout error
-    state.refreshCount = state.refreshCount+1
-    if (state.refreshCount > 20) {state.error = "Network Timeout. Check your ip address and port. You must access a local IP address and a non-https port."} 
-
-	state.refreshCountMotion = 0
-
-    def options = camerasDiscovered() ?: []
-    def numFound = options.size() ?: 0
-    
-    if (state.error == "")
-    {
-    	if (!state.SSCameraList || (state.commandList.size() > 0)) {
-        	// we're waiting for the list to be created
-            return dynamicPage(name:"cameraDiscovery", title:"Diskstation", nextPage:"", refreshInterval:4, uninstall: true) {
-                section("Connecting to ${userip}:${userport}") {
-                	paragraph "This can take a minute. Please wait..."
-                }
-            }
-        } else {
-        	// we have the list now
-            return dynamicPage(name:"cameraDiscovery", title:"Camera Information", nextPage:"motionSetup", uninstall: true) {
-                section("See the available cameras:") {
-                    input "selectedCameras", "enum", required:false, title:"Select Cameras (${numFound} found)", multiple:true, options:options
-                }
-                section("") {
-                    paragraph "Select the cameras that you want created as ST devices. Cameras will be remembered by the camera name in Surveillance Station. Please do not rename them in Surveillance Station or you may lose access to them in ST. Advanced users may change the ST DNI to the new camera name if needed."
-                }
-            }
-        }
-    }
-    else
-    {	
-    	def error = state.error
+metadata {
+	definition (name: "Diskstation Camera", namespace: "swanny", author: "swanny") {
+		capability "Image Capture"
+        capability "Switch"
+        capability "Motion Sensor"
+        capability "Refresh"
         
-        // clear the error
-        state.error = ""
+        attribute "panSupported", "string"
+        attribute "tiltSupported", "string"
+        attribute "zoomSupported", "string"
+        attribute "homeSupported", "string"
+        attribute "maxPresets", "string"
+        attribute "numPresets", "string"
+        attribute "curPreset", "string"   
+        attribute "numPatrols", "string"
+        attribute "curPatrol", "string"
+        attribute "refreshState", "string"
+        attribute "autoTake", "string"
+        attribute "takeImage", "string"
         
-        // force us to reget the DS info
-        state.previoususerip = "forcereset"
-        clearDiskstationCommandQueue()
-        
-        // show the message
-        return dynamicPage(name:"cameraDiscovery", title:"Connection Error", nextPage:"", uninstall: true) {
-        	section() {
-            	paragraph error
-            }
-        }    
-    }
-}
-
-def getDSInfo() {	
-    // clear camera list for now
-    state.motionTested = false
-    state.getDSinfo = false
-    state.SSCameraList = null
-    state.error = ""
-    state.api = ["SYNO.API.Info":[path:"query.cgi",minVersion:1,maxVersion:1]]
-    state.lastEventTime = null
-    
-    clearDiskstationCommandQueue() 
-
-    // get APIs    
-    queueDiskstationCommand("SYNO.API.Info", "Query", "query=SYNO.API.Auth", 1)
-    queueDiskstationCommand("SYNO.API.Info", "Query", "query=SYNO.SurveillanceStation.Camera", 1)
-    queueDiskstationCommand("SYNO.API.Info", "Query", "query=SYNO.SurveillanceStation.PTZ", 1)
-    queueDiskstationCommand("SYNO.API.Info", "Query", "query=SYNO.SurveillanceStation.ExternalRecording", 1)
-
-    // login
-    executeLoginCommand()
-
-    // get cameras
-    queueDiskstationCommand("SYNO.SurveillanceStation.Camera", "List", "additional=device", 1)
-}
-
-def executeLoginCommand() {
-	queueDiskstationCommand("SYNO.API.Auth", "Login", "account=${URLEncoder.encode(username, "UTF-8")}&passwd=${URLEncoder.encode(password, "UTF-8")}&session=SurveillanceStation&format=sid", 2)
-}
-
-def getCameraCapabilities() {
-    state.getCameraCapabilities = false;
-    state.cameraCapabilities = [:]
-    state.cameraPresets = []
-    state.cameraPatrols = []
-
-    state.SSCameraList.each {
-        updateCameraInfo(it)     	
-    }
-}
-
-// takes in object from state.SSCameraList
-def updateCameraInfo(camera) {
-	log.trace "Updating camera info for Camera ID " + camera.id
-    def vendor = camera.additional.device.vendor.replaceAll(" ", "%20")
-    def model = camera.additional.device.model.replaceAll(" ", "%20")
-    if ((model == "Define") && (vendor = "User")) {
-    	// user defined camera
-        def capabilities = [:]
-        
-        capabilities.ptzPan = false
-    	capabilities.ptzTilt = false
-    	capabilities.ptzZoom = false
-    	capabilities.ptzHome = false
-    	capabilities.ptzPresetNumber = 0
-        
-        state.cameraCapabilities.put(makeCameraModelKey(vendor, model), capabilities)
-    } else {
-    	// standard camera
-        //queueDiskstationCommand("SYNO.SurveillanceStation.Camera", "GetCapability", "vendor=${vendor}&model=${model}", 1)
-        queueDiskstationCommand("SYNO.SurveillanceStation.Camera", "GetCapabilityByCamId", "cameraId=${camera.id}", 4)
-        queueDiskstationCommand("SYNO.SurveillanceStation.PTZ", "ListPreset", "cameraId=${camera.id}", 1)    
-        queueDiskstationCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol", "cameraId=${camera.id}", 1)
-    }
-}
-
-Map camerasDiscovered() {
-	def map = [:]
-	state.SSCameraList.each { 
-		map[it.id] = it.name
+        command "left"
+    	command "right"
+    	command "up"
+    	command "down"
+        command "zoomIn"
+        command "zoomOut"
+        command "home"
+        command "presetup"
+        command "presetdown"
+        command "presetgo"
+        command "presetGoName", ["string"]
+        command "patrolup"
+        command "patroldown"
+        command "patrolgo"
+        command "patrolGoName", ["string"]
+        command "refresh"
+        command "autoTakeOff"
+        command "autoTakeOn"
+        command "motionActivated"
+        command "motionDeactivate"
+        command "initChild"
+        command "doRefreshWait"
+        command "doRefreshUpdate"
+        command "recordEventFailure"
+        command "putImageInS3"
 	}
-	map
-}
 
-def getUniqueCommand(String api, String Command) {
-	return api + Command
-}
+	simulator {
+		// TODO: define status and reply messages here
+	}
 
-def getUniqueCommand(Map commandData) {
-	return getUniqueCommand(commandData.api, commandData.command)
-}
+	tiles {
+		standardTile("camera", "device.image", width: 1, height: 1, canChangeIcon: false, inactiveLabel: true, canChangeBackground: true) {
+			state "default", label: "", action: "", icon: "st.camera.dropcam-centered", backgroundColor: "#FFFFFF"
+		}
 
-def makeCameraModelKey(cameraInfo) {
-    def vendor = cameraInfo.additional.device.vendor.replaceAll(" ", "%20")
-    def model = cameraInfo.additional.device.model.replaceAll(" ", "%20")
-	
-    return makeCameraModelKey(vendor, model);
-}
+		carouselTile("cameraDetails", "device.image", width: 3, height: 2) { }
 
-def makeCameraModelKey(vendor, model) {
-	return (vendor + "_" + model)
-}
-
-/////////////////////////////////////
-
-def finalizeChildCommand(commandInfo) {
-	state.lastEventTime = commandInfo.time
-}
-
-// Guess what child issued the command.  Use the one that has the oldest unfinished takeImage event.
-// This unreliable in enviroments with many cameras set to AutoTake
-def getFirstChildCommand(commandType) {
-	def commandInfo = null
-    
-	// get event type to search for
-    def searchType = null
-	switch (commandType) {
-        case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot"):
-        	searchType = "takeImage"
-        	break   
-    }
-    
-    if (searchType != null) {
-        def children = getChildDevices()
-        def startTime = now() - 40000
+		standardTile("take", "device.image", width: 1, height: 1, canChangeIcon: false, inactiveLabel: true, canChangeBackground: false) {
+			state "take", label: "Take", action: "Image Capture.take", icon: "st.camera.dropcam", backgroundColor: "#FFFFFF", nextState:"taking"
+			state "taking", label:'Taking', action: "", icon: "st.camera.dropcam", backgroundColor: "#53a7c0"
+			state "image", label: "Take", action: "Image Capture.take", icon: "st.camera.dropcam", backgroundColor: "#FFFFFF", nextState:"taking"
+		}
         
-        if (state.lastEventTime != null) {
-        	if (startTime <= state.lastEventTime) {
-        		startTime = state.lastEventTime+1
-            }
-        }
-        
-        //log.trace "startTime = ${startTime}, now = ${now()}"
-
-        def bestTime = now()
-
-        children.each {
-            // get the events from the child
-            def events = it.eventsSince(new Date(startTime))        
-            def typedEvents = events.findAll { it.name == searchType }
-
-			if (typedEvents) {
-             	typedEvents.each { event ->
-                    def eventTime = event.date.getTime()
-                    //log.trace "eventTime = ${eventTime}"
-                    if (eventTime >= startTime && eventTime < bestTime) {
-                        // is it the oldest
-                        commandInfo = [:]
-                        commandInfo.child = it        
-                        commandInfo.time = eventTime
-                        bestTime = eventTime
-                        //log.trace "bestTime = ${bestTime}"
-                    }
-                }
-			}
-        }
-    }
-    return commandInfo
-}
-
-
-
-/////////////////////////////////////
-
-// return a getUniqueCommand() equivalent value
-def determineCommandFromResponse(parsedEvent, bodyString, body) {
-	if (parsedEvent.tempImageKey) {
-    	return getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot")	
-    }
-    
-    if (body) {
-    	if (body.data) {
-        	// has data
-        	if (body.data.sid != null) { return getUniqueCommand("SYNO.API.Auth", "Login") }            
-            if (bodyString.contains("maxVersion")) { return getUniqueCommand("SYNO.API.Info", "Query") }
-            if (body.data.cameras != null) { return getUniqueCommand("SYNO.SurveillanceStation.Camera", "List") }
-            //if (body.data.ptzPan != null) { return getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapability")}
-            if (body.data.ptzPan != null) { return getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapabilityByCamId")}
-            if ((body.data.total != null) && (body.data.offset != null)) 
-            { 	// this hack is annoying, they return the same thing if there are zero presets or patrols
-            	if ((state.commandList.size() > 0) 
-                	&& (getUniqueCommand(state.commandList.first()) == getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPreset"))) {
-                	return getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPreset") 
-                }
-                else {
-            		return getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol") 
-                }
-            }
+        standardTile("up", "device.tiltSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "up", action: "up", icon: "st.thermostat.thermostat-up"
+            state "no", label: "unavail", action: "", icon: "st.thermostat.thermostat-up"
     	}
+        
+        standardTile("down", "device.tiltSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "down", action: "down", icon: "st.thermostat.thermostat-down"
+            state "no", label: "unavail", action: "", icon: "st.thermostat.thermostat-down"
+    	}
+
+        standardTile("left", "device.panSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "left", action: "left", icon: ""
+            state "no", label: "unavail", action: "", icon: ""
+    	}
+
+		standardTile("right", "device.panSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "right", action: "right", icon: ""
+            state "no", label: "unavail", action: "", icon: ""
+    	}
+        
+        standardTile("zoomIn", "device.zoomSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "zoom in", action: "zoomIn", icon: "st.custom.buttons.add-icon"
+            state "no", label: "zoom unavail", action: "", icon: "st.custom.buttons.add-icon"
+    	}
+        
+        standardTile("zoomOut", "device.zoomSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "zoom out", action: "zoomOut", icon: "st.custom.buttons.subtract-icon"
+            state "no", label: "zoom unavail", action: "", icon: "st.custom.buttons.subtract-icon"
+    	}
+        
+        standardTile("home", "device.homeSupported", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+      		state "yes", label: "home", action: "home", icon: "st.Home.home2"
+            state "no", label: "unavail", action: "", icon: "st.Home.home2"
+    	}
+        
+        standardTile("presetdown", "device.curPreset", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "preset", action: "presetdown", icon: "st.thermostat.thermostat-down"
+            state "0", label: "preset", action: "", icon: "st.thermostat.thermostat-down"
+    	}
+        
+        standardTile("presetup", "device.curPreset", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "preset", action: "presetup", icon: "st.thermostat.thermostat-up"
+            state "0", label: "preset", action: "", icon: "st.thermostat.thermostat-up"
+    	}
+        
+        standardTile("presetgo", "device.curPreset", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+      		state "yes", label: '${currentValue}', action: "presetgo", icon: "st.motion.acceleration.inactive"
+            state "0", label: "N/A", action: "", icon: "st.motion.acceleration.inactive"
+    	}
+
+        standardTile("patroldown", "device.curPatrol", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "patrol", action: "patroldown", icon: "st.thermostat.thermostat-down"
+            state "0", label: "patrol", action: "", icon: "st.thermostat.thermostat-down"
+    	}
+        
+        standardTile("patrolup", "device.curPatrol", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false, decoration: "flat") {
+      		state "yes", label: "patrol", action: "patrolup", icon: "st.thermostat.thermostat-up"
+            state "0", label: "patrol", action: "", icon: "st.thermostat.thermostat-up"
+    	}
+        
+        standardTile("patrolgo", "device.curPatrol", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+      		state "yes", label: '${currentValue}', action: "patrolgo", icon: "st.motion.motion-detector.active"
+            state "0", label: "N/A", action: "", icon: "st.motion.motion-detector.active"
+    	}
+		
+        standardTile("refresh", "device.refreshState", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+      		state "none", label: "refresh", action: "refresh", icon: "st.secondary.refresh-icon", backgroundColor: "#FFFFFF"
+            state "want", label: "refresh", action: "refresh", icon: "st.secondary.refresh-icon",  backgroundColor: "#53A7C0"
+            state "waiting", label: "refresh", action: "refresh", icon: "st.secondary.refresh-icon",  backgroundColor: "#53A7C0"
+    	}
+        
+        standardTile("recordStatus", "device.switch", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+      		state "off", label: "record", action: "switch.on", icon: "st.camera.camera", backgroundColor: "#FFFFFF"
+    	  	state "on", label: "stop", action: "switch.off", icon: "st.camera.camera",  backgroundColor: "#53A7C0"
+	    }
+
+		standardTile("motion", "device.motion", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+			state("active", label:'motion', icon:"st.motion.motion.active", backgroundColor:"#53a7c0")
+			state("inactive", label:'no motion', icon:"st.motion.motion.inactive", backgroundColor:"#ffffff")
+		}
+        
+    	standardTile("auto", "device.autoTake", width: 1, height: 1, canChangeIcon: false, canChangeBackground: false) {
+			state "off", label: 'No Take', action: "autoTakeOn", icon: "st.motion.motion.active", backgroundColor: "#ffffff"
+			state "on", label: 'Take', action: "autoTakeOff", icon: "st.motion.motion.active", backgroundColor: "#53a7c0"
+		}
+
+        main(["motion"])
+		details(["cameraDetails", 
+        	"take", "motion", "recordStatus",             
+            "presetup", "presetgo", "presetdown", 
+            "patrolup", "patrolgo", "patroldown", 
+            "zoomIn", "up", "zoomOut", 
+            "left", "home", "right", 
+            "refresh", "down", "auto"])
+	}   
+    
+    preferences {
+       input "takeStream", "number", title: "Stream to capture image from",
+              description: "Leave blank unless want to use another stream.", defaultValue: "",
+              required: false, displayDuringSetup: true
     }
-    
-    return ""
 }
 
-def doesCommandReturnData(uniqueCommand) {
-	switch (uniqueCommand) {
-    	case getUniqueCommand("SYNO.API.Auth", "Login"):
-        case getUniqueCommand("SYNO.API.Info", "Query"): 
-        case getUniqueCommand("SYNO.SurveillanceStation.Camera", "List"): 
-        case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapability"): 
-        case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapabilityByCamId"):
-        case getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPreset"): 
-        case getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol"): 
-        case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot"):
-        	return true
-    }
-    
-    return false
+// parse events into attributes
+def parse(String description) {
+	log.trace "parse called with " + description
 }
 
-// this process is overly complex handling async events from one IP
-// would be much better synchronous and not having to track / guess where things are coming from
-// The event argument doesn't include any way to link it back to a particular hubAction request.
-def locationHandler(evt) {
-
-	//log.trace "String value: " + evt.stringValue
-
-	def description = evt.description
-	def hub = evt?.hubId
-
-	def parsedEvent = parseEventMessage(description)
-	parsedEvent << ["hub":hub]   
-    
-    log.trace "Parsed event keys: " + parsedEvent.keySet()
-        
-    if ((parsedEvent.ip == convertIPtoHex(userip)) && (parsedEvent.port == convertPortToHex(userport)))
-    {
-    	def bodyString = ""
-        def body = null
-                
-        if (hub) { state.hub = hub }
-
-        if (parsedEvent.headers && parsedEvent.body)
-        { // DS RESPONSES
-            def headerString = new String(parsedEvent.headers.decodeBase64())
-            bodyString = new String(parsedEvent.body.decodeBase64())
-
-            def type = (headerString =~ /Content-Type:.*/) ? (headerString =~ /Content-Type:.*/)[0] : null
-            log.trace "DISKSTATION REPONSE TYPE: $type"
-            if (type?.contains("text/plain")) 
-            {
-            	log.trace bodyString     
-            	body = new groovy.json.JsonSlurper().parseText(bodyString)
-            } else if (type?.contains("application/json")) {
-            	log.trace bodyString
-                body = new groovy.json.JsonSlurper().parseText(bodyString)
-            } else if (type?.contains("text/html")) {
-                log.trace bodyString
-                body = new groovy.json.JsonSlurper().parseText(bodyString.replaceAll("\\<.*?\\>", ""))                
-            } else {
-                // unexpected data type
-                log.trace "unexpected data type"
-                if (state.commandList.size() > 0) {
-                	Map commandData = state.commandList.first()
-                	handleErrors(commandData, null)
-                }
-                return
-            }
-            if (body.error) {   
-                if (state.commandList.size() > 0) {
-                    Map commandData = state.commandList?.first()
-                    // should we generate an error for this type or ignore
-                    if ((getUniqueCommand(commandData) == getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPreset"))
-                        || (getUniqueCommand(commandData) == getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol")))
-                    {
-                        // ignore
-                        body.data = null
-                    } else {
-                        // don't ignore
-                        handleErrors(commandData, body.error)
-                        return
-                    }
-                } else {
-                    // error on a command we don't care about
-                    handleErrorsIgnore(null, body.error)
-                    return
-                }
-            }
-   		}
-        
-        // gathered our incoming command data, see what we have        
-        def commandType = determineCommandFromResponse(parsedEvent, bodyString, body)
-   		
-   		// check if this is a command for the master   
-        if ((state.commandList.size() > 0) && (body != null) && (commandType != ""))
-        {
-            Map commandData = state.commandList.first()
-            
-            //log.trace "Logging command " + bodyString
-            
-            //log.trace "master waiting on " + getUniqueCommand(commandData)
-            if (getUniqueCommand(commandData) == commandType) 
-            {
-            	// types match between incoming and what we wanted, handle it
-                def finalizeCommand = true
-
-                //try {
-                    if (body.success == true)
-                    {
-                        switch (getUniqueCommand(commandData)) {
-                            case getUniqueCommand("SYNO.API.Info", "Query"):
-                            	def api = commandData.params.split("=")[1];
-                            	state.api.put((api), body.data[api]);
-                            	break
-                            case getUniqueCommand("SYNO.API.Auth", "Login"):
-                            	state.sid = body.data.sid
-                            	break
-                            case getUniqueCommand("SYNO.SurveillanceStation.Camera", "List"):
-                            	state.SSCameraList = body.data.cameras
-                            	state.getCameraCapabilities = true;
-                                getCameraCapabilities()
-                            	break
-                            case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapability"):
-                            	// vendor=TRENDNet&model=TV-IP751WC
-                                def info = (commandData.params =~ /vendor=(.*)&model=(.*)/)
-                                if ((info[0][1] != null) && (info[0][2] != null)) {
-                                    state.cameraCapabilities.put(makeCameraModelKey(info[0][1], info[0][2]), body.data)
-                                }
-                            	break                             
-                            case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapabilityByCamId"):
-                            	def cameraId = (commandData.params =~ /cameraId=([0-9]+)/) ? (commandData.params =~ /cameraId=([0-9]+)/)[0][1] : null
-                                if (cameraId) { 
-                                	def camera = state.SSCameraList.find { it.id.toString() == cameraId.toString() }
-                                    if (camera) {
-                                        def vendor = camera.additional.device.vendor.replaceAll(" ", "%20")
-                                        def model = camera.additional.device.model.replaceAll(" ", "%20")
-                                        state.cameraCapabilities.put(makeCameraModelKey(vendor, model), body.data)
-                                    } else {
-                                    	log.trace "invalid camera id"
-                                    }
-                                }
-                            	break
-                            case getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPreset"):
-                            	def cameraId = (commandData.params =~ /cameraId=([0-9]+)/) ? (commandData.params =~ /cameraId=([0-9]+)/)[0][1] : null
-                            	if (cameraId) { state.cameraPresets[cameraId.toInteger()] = body.data?.presets }
-                            	break
-                            case getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol"):
-                            	def cameraId = (commandData.params =~ /cameraId=([0-9]+)/) ? (commandData.params =~ /cameraId=([0-9]+)/)[0][1] : null
-                            	if (cameraId) { state.cameraPatrols[cameraId.toInteger()] = body.data?.patrols }
-                            	break
-                            default:
-                                log.debug "received invalid command: " + state.lastcommand
-                            	finalizeCommand = false
-                            	break
-                    	}
-                    } else {
-                        // success = false
-						log.debug "success = false but how did we know what command it was?"
-                    }
-
-                    // finalize and send next command
-                    if (finalizeCommand == true) {
-                        finalizeDiskstationCommand()
-                    }
-                //}
-                //catch (Exception err) {
-                //	log.trace "parse exception: ${err}"
-                //    handleErrors(commandData)
-                //}
-                // exit out, we've handled the message we wanted
-				return
-            }            
-      	}
-        // no master command waiting or not the one we wanted 
-        // is this a child message?
-        
-        if (commandType != "") {
-        	log.trace "event = ${description}"
-        
-            // guess who wants this type (commandType)        
-            def commandInfo = getFirstChildCommand(commandType)
-
-            if (commandInfo != null) {
-                switch (commandType) {
-                    case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot"):
-                        //if (parsedEvent.bucket && parsedEvent.key){
-                        if (parsedEvent.tempImageKey){
-                        	log.trace "saving image to device"
-                            commandInfo?.child?.putImageInS3(parsedEvent)
-                        }
-                     	else
-                        {
-                        	log.trace "Doing nothing"
-                        }
-                        return finalizeChildCommand(commandInfo)
-                }
-            }
-        }
-        
-        // no one wants this type or unknown type
-        if ((state.commandList.size() > 0) && (body != null))
-        {
-        	// we have master commands, maybe this is an error
-            Map commandData = state.commandList.first()
-            
-            if (body.success == false) {  
-            	def finalizeCommand = true
-                
-                switch (getUniqueCommand(commandData)) {
-                    case getUniqueCommand("SYNO.API.Info", "Query"):
-                    case getUniqueCommand("SYNO.API.Auth", "Login"):
-                    case getUniqueCommand("SYNO.SurveillanceStation.Camera", "List"):
-                    case getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetCapability"):
-                    	handleErrors(commandData, null)
-                    	break
-                    case getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPreset"):
-                    	def cameraId = (commandData.params =~ /cameraId=([0-9]+)/) ? (commandData.params =~ /cameraId=([0-9]+)/)[0][1] : null
-                    	if (cameraId) { state.cameraPresets[cameraId.toInteger()] = null }
-                    	break
-                    case getUniqueCommand("SYNO.SurveillanceStation.PTZ", "ListPatrol"):
-                    	def cameraId = (commandData.params =~ /cameraId=([0-9]+)/) ? (commandData.params =~ /cameraId=([0-9]+)/)[0][1] : null
-                    	if (cameraId) { state.cameraPatrols[cameraId.toInteger()] = null }
-                    	break
-                    default:
-                        log.debug "don't know now to handle this command " + state.lastcommand
-                    	finalizeCommand = false
-                    	break
-             	}
-                if (finalizeCommand == true) {
-                 	finalizeDiskstationCommand()
-                }
-                return
-          	} else {
-            	// if we get here, we likely just had a success for a message we don't care about
-            }
-        }
-       
-        // is this an empty GetSnapshot error?
-        if (parsedEvent.requestId && !parsedEvent.tempImageKey) {
-        	def commandInfo = getFirstChildCommand(getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot"))
-            if (commandInfo) {
-                log.trace "take image command returned an error: " + commandInfo + " | " + parsedEvent              
-                if ((state.lastErrorResend == null) || ((now() - state.lastErrorResend) > 15000)) {
-                	log.trace "resending to get real error message"
-                	state.lastErrorResend = now()
-                    state.doSnapshotResend = true
-                    sendDiskstationCommand(createCommandData("SYNO.SurveillanceStation.Camera", "GetSnapshot", "cameraId=${getDSCameraIDbyChild(commandInfo.child)}", 1))                    
-                } else {
-                	log.trace "not trying to resend again for more error info until later"
-                }
-                return 
-            }
-        }
-        
-        // why are we here?
-        log.trace "Did not use [" + bodyString + "]"
-   	}
-}
-
-def handleErrors(commandData, errorData) {
-	if (errorData) { 
-    	log.trace "trying to handle error ${errorData}"
-    }
-    
-	if (!state.SSCameraList) {
-    	// error while starting up
-        switch (getUniqueCommand(commandData)) {
-            case getUniqueCommand("SYNO.API.Info", "Query"):
-            state.error = "Network Error. Check your ip address and port. You must access a local IP address and a non-https port."
-            break
-                case getUniqueCommand("SYNO.API.Auth", "Login"):
-            state.error = "Login Error. Login failed. Check your login credentials."
-            break
-                default:
-                state.error = "Error communicating with the Diskstation. Please check your settings and network connection. API = " + commandData.api + " command = " + commandData.command
-            break
-      	}
-    } else {
-    	// error later on
-        checkForRedoLogin(commandData, errorData)
-    }	
-}
-
-def checkForRedoLogin(commandData, errorData) {
-	if (errorData != null) {
-        log.trace errorData
-        if (errorData?.code == 102 || errorData?.code == 105) {
-            log.trace "relogging in"
-			executeLoginCommand()
+// can't do this directly any longer.  
+def putImageInS3(map) {
+	def result = []
+	
+	try {
+		if(map.tempImageKey)
+		{
+        	def picName = getPictureName()
+            try {
+				storeTemporaryImage(map.tempImageKey, picName)
+			} catch(Exception e) {
+				log.error e
+			}
+            log.trace "image stored = " + picName
         } else {
-        	if (commandData) {
-            	state.error = "Error communicating with the Diskstation. Please check your settings and network connection. API = " + commandData.api + " command = " + commandData.command
-        	} else {
-            	state.error = "Error communicating with the Diskstation. Please check your settings and network connection."
-            }
-        }
-    }
-}
-
-def handleErrorsIgnore(commandData, errorData) {
-	if (errorData) { 
-    	log.trace "trying to handle error ${errorData}"
-    }
-    checkForRedoLogin(commandData, errorData)
-}
-
-private def parseEventMessage(Map event) {
-	//handles attribute events
-    log.trace "map event recd = " + event
-	return event
-}
-
-private def parseEventMessage(String description) {
-	log.debug "description = " + description
-	def event = [:]
-	def parts = description.split(',')
-	parts.each { part ->
-		part = part.trim()
-		if (part.startsWith('bucket:')) {
-			part -= "bucket:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.bucket = valueString
-			}
-		}
-        else if (part.startsWith('key:')) {
-			part -= "key:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.key = valueString
-			}
-		}
-        else if (part.startsWith('ip:')) {
-			part -= "ip:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.ip = valueString
-			}
-		}
-        else if (part.startsWith('port:')) {
-			part -= "port:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.port = valueString
-			}
-		}
-        else if (part.startsWith('headers')) {
-			part -= "headers:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.headers = valueString
-			}
-		}
-        else if (part.startsWith('tempImageKey')) {
-			part -= "tempImageKey:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.tempImageKey = valueString
-			}
-		}
-		else if (part.startsWith('body')) {
-			part -= "body:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.body = valueString
-			}
-		}
-        else if (part.startsWith('requestId')) {
-			part -= "requestId:"
-			def valueString = part.trim()
-			if (valueString) {
-				event.requestId = valueString
-			}
-		}
+        	log.trace "The image (" + picName + ") is missing"
+        }        
 	}
-
-	event
-}
-
-private String convertIPtoHex(ipAddress) { 
-    String hex = ipAddress.tokenize( '.' ).collect {  String.format( '%02x', it.toInteger() ) }.join()
-    hex = hex.toUpperCase()
-    return hex
-}
-
-private String convertPortToHex(port) {
-	String hexport = port.toString().format( '%04x', port.toInteger() )
-    hexport = hexport.toUpperCase()
-    return hexport
-}
-
-private String getDeviceId(ip, port) {
-    def hosthex = convertIPtoHex(ip)
-    def porthex = convertPortToHex(port)
-	return "$hosthex:$porthex"
-}
-
-def installed() {
-	log.debug "Installed with settings: ${settings}"
-	initialize()
-}
-
-def updated() {
-	log.debug "Updated with settings: ${settings}"
-	initialize()
-}
-
-def initialize() {
-	unsubscribe()
-	state.subscribe = false
-    state.getDSinfo = true
-    
-    state.lastMotion = [:]
-    
-    if (selectedCameras) {
-    	addCameras()
-    }
-    
-    if(!state.subscribe) {
-        log.trace "subscribe to location"
-        subscribe(location, null, locationHandler, [filterEvents:false])
-        state.subscribe = true
-    }
-}
-
-def uninstalled() {
-    removeChildDevices(getChildDevices())
-}
-
-private removeChildDevices(delete) {
-    delete.each {
-        deleteChildDevice(it.deviceNetworkId)
-    }
-}
-
-def createCameraDNI(camera) {
-	return (camera.name)
-}
-
-def addCameras() {
-	selectedCameras.each { cameraIndex ->
-        def newCamera = state.SSCameraList.find { it.id.toString() == cameraIndex.toString() }
-        log.trace "newCamera = " + newCamera
-        if (newCamera != null) {
-            def newCameraDNI = createCameraDNI(newCamera)
-            log.trace "newCameraDNI = " + newCameraDNI
-            def d = getChildDevice(newCameraDNI)
-            if(!d) {
-                d = addChildDevice("swanny", "Diskstation Camera", newCameraDNI, state.hub, [label:"Diskstation ${newCamera?.name}"]) //, completedSetup: true
-                log.trace "created ${d.displayName} with id $newCameraDNI"
-
-                // set up device capabilities here ??? TODO ???
-                //d.setModel(newPlayer?.value.model)
-            } else {
-                log.trace "found ${d.displayName} with id $newCameraDNI already exists"
-            }
-
-            // set up even if already installed in case setup has changed
-            d.initChild(state.cameraCapabilities[makeCameraModelKey(newCamera)])
-        }
+	catch(Exception e) {
+		log.error e
 	}
-
+    return result
 }
 
-def createDiskstationURL(Map commandData) {
-    String apipath = state.api.get(commandData.api)?.path
-    if (apipath != null) {
 
-        // add session id for most events (not api query or login)
-        def session = ""
-        if (!( (getUniqueCommand("SYNO.API.Info", "Query") == getUniqueCommand(commandData)) 
-              || (getUniqueCommand("SYNO.API.Auth", "Login") == getUniqueCommand(commandData)) ) ) {
-            session = "&_sid=" + state.sid
-        }
-        
-        if ((state.api.get(commandData.api)?.minVersion <= commandData.version) && (state.api.get(commandData.api)?.maxVersion >= commandData.version)) {
-        	def url = "/webapi/${apipath}?api=${commandData.api}&method=${commandData.command}&version=${commandData.version}${session}&${commandData.params}"
-            return url
-       	} else {
-        	log.trace "need a higher DS api version"
-        }
-
-    } else {
-        // error!!!???
-        log.trace "Unable to send to api " + commandData.api
-        log.trace "Available APIs are " + state.api
+def getCameraID() {
+    def cameraId = parent.getDSCameraIDbyChild(this)
+    if (cameraId == null) {
+    	log.trace "could not find device DNI = ${device.deviceNetworkId}"
     }
-    return null
+    return (cameraId)
 }
 
-def createHubAction(Map commandData) {
-    
-    String deviceNetworkId = getDeviceId(userip, userport)
-    String ip = userip + ":" + userport
-
+// handle commands
+def take() { 
     try {
-        def url = createDiskstationURL(commandData)
-        if (url != null) {
-            def acceptType = "application/json, text/plain, text/html, */*"
-            if (commandData.acceptType) {
-                acceptType = commandData.acceptType
-            }
-
-            def hubaction = new physicalgraph.device.HubAction(
-                """GET ${url} HTTP/1.1\r\nHOST: ${ip}\r\nAccept: ${acceptType}\r\n\r\n""", 
-                physicalgraph.device.Protocol.LAN, "${deviceNetworkId}") //, [callback: testHandler]) <-- the callback doesn't work              
-                
-            if (getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot") == getUniqueCommand(commandData)) {
-            	if (state.doSnapshotResend) {
-                	state.doSnapshotResend = false
-                } else {
-                	hubaction.options = [outputMsgToS3:true]
-                }
-            }
-            return hubaction   
-        } else {
-        	return null
-        }
+    	def lastNum = device.currentState("takeImage")?.integerValue 
+    	sendEvent(name: "takeImage", value: "${lastNum+1}")
     }
-    catch (Exception err) {
-        log.debug "error sending message: " + err
-    }
-    return null
-}
-
-def sendDiskstationCommand(Map commandData) {
-	def hubaction = createHubAction(commandData)
-    if (hubaction) {
-		sendHubCommand(hubaction)
-    }
-}
-
-def createCommandData(String api, String command, String params, int version) {
-    def commandData = [:]
-    commandData.put('api', api)
-    commandData.put('command', command)
-    commandData.put('params', params)
-    commandData.put('version', version)
-    commandData.put('time', now())
-    
-    if (getUniqueCommand("SYNO.SurveillanceStation.Camera", "GetSnapshot") == getUniqueCommand(commandData)) {
-		commandData.put('acceptType', "image/jpeg");
-    }
-    
-    return commandData
-}
-
-def queueDiskstationCommand(String api, String command, String params, int version) {
-    log.trace "queing command " + command
-    
-    def commandData = createCommandData(api, command, params, version)
-    
-    if (doesCommandReturnData(getUniqueCommand(commandData))) {
-    	// queue since we get data
-        state.commandList.add(commandData)
-
-        // list was empty, send now
-        if (state.commandList.size() == 1) {
-            sendDiskstationCommand(state.commandList.first())
-        } else {
-        	// something else waiting
-            if ((now() - state.commandList.first().time) > 15000) {
-            	log.trace "waiting command being cancelled = " + state.commandList.first()
-                finalizeDiskstationCommand()
-            }
-        }
-    } else {
-    	sendDiskstationCommand(commandData)
-    }
-}
-
-def finalizeDiskstationCommand() {
-	//log.trace "removing " + state.commandList.first().command
-    state.commandList.remove(0)
-    
-    // may need to handle some child stuff based on this command
-    pollChildren()
-    
-    // send next command if list was full
-    if (state.commandList.size() > 0) {
-    	sendDiskstationCommand(state.commandList.first())
-    }    
-}
-
-private def clearDiskstationCommandQueue() {
-	state.commandList.clear()
-}
-
-def webNotifyCallback() {
-	log.trace "motion callback"
-    
-    if (params?.msg?.contains("Test message from Synology")) {
-    	state.motionTested = true
-        log.debug "Test message received"
-    }
-    
-    // The SMS message should be of the form "Camera Foscam1 on DiskStation has detected motion"
-    def motionMatch = (params?.msg =~ /Camera (.*) on (.*) has detected motion/)
-    if (motionMatch) {
-        def thisCamera = state.SSCameraList.find { it.name.toString() == motionMatch[0][1].toString() }
-        if (thisCamera) {
-        	def cameraDNI = createCameraDNI(thisCamera)
-            if (cameraDNI) {
-                if ((state.lastMotion[cameraDNI] == null) || ((now() - state.lastMotion[cameraDNI]) > 1000)) {
-                    state.lastMotion[cameraDNI] = now()
-                    
-                    // Only activate or take an image if the camera is not yet activated.
-                    def d = getChildDevice(cameraDNI)
-                    if (d && d.currentValue("motion") == "inactive") {
-                        log.trace "Motion detected on " + d
-                        d.motionActivated()
-                        if (d.currentValue("autoTake") == "on") {
-                            log.trace "AutoTake is on. Taking image for " + d 
-                            d.take()
-                        }
-                        doAndScheduleHandleMotion()
-                    } else {
-                    	log.trace "Doing nothing. Motion event received for " + d + " which is already active."
-                    }
-                }
-            }
-        }
-    }
-}
-
-// runIn appears to be unreliable. For backup, schedule a cleanup every 5 minutes
-def doAndScheduleHandleMotion() {
-	handleMotionCleanup()
-    // This orverwrites any other scheduled event.  We'll only get one extra call to handleMotion this way.
-	runEvery5Minutes( "handleMotionCleanup" )
-}
-
-// Deactivate the cameras is the motion event is old.  Runs itself again in the least time left.
-def handleMotionCleanup() {
-	def children = getChildDevices()
-    def nextTimeDefault = 120000; //1000000
-    def nextTime = nextTimeDefault;
-    log.debug "handleMotionCleanup"
-    
-    children.each {
-    	def newTime = checkMotionDeactivate(it)
-        if ((newTime != null) && (newTime < nextTime)) {
-        	nextTime = newTime
-        }
-    }
-
-	//log.debug "handleMotion nextTime = ${nextTime}"
-	if (nextTime != nextTimeDefault){
-    	log.trace "nextTime = " + nextTime
-        nextTime = (nextTime >= 25) ? nextTime : 25
-		runIn((nextTime+5).toInteger(), "handleMotionCleanup")
-    }
-}
-
-// Determines the time remaining before deactivation for a camera and deactivates if it is up.
-def checkMotionDeactivate(child) {
-	def timeRemaining = null
-    def cameraDNI = child.deviceNetworkId
-    
-    try {
-        def delay = (motionOffDelay) ? motionOffDelay : 5
-        delay = delay * 60
-        if (state.lastMotion[cameraDNI] != null) { 
-            timeRemaining = delay - ((now() - state.lastMotion[cameraDNI])/1000) 
-        }
-    }
-    catch (Exception err) {
-    	log.error(err)
-    	timeRemaining = 0
-    }
-    
-    log.debug "checkMotionDeactivate ${cameraDNI} timeRemaining = ${timeRemaining}"
-    
-    // we can end motion early to avoid unresponsiveness later
-    if ((timeRemaining != null) && (timeRemaining < 15)) {
-		child.motionDeactivate()
-        state.lastMotion[cameraDNI] = null
-        timeRemaining = null        
-    	log.debug "checkMotionDeactivate ${cameraDNI} deactivated"
-    }
-    return timeRemaining
-}
-
-
-/////////CHILD DEVICE METHODS
-
-def getDSCameraIDbyChild(childDevice) {
-	return getDSCameraIDbyName(childDevice.device?.deviceNetworkId)
-}
-
-def getDSCameraIDbyName(String name) {    
-    if (name) {
-    	def thisCamera = state.SSCameraList.find { createCameraDNI(it).toString() == name.toString() }
-		return thisCamera?.id
-    } else {
-    	return null   
-    }
-}
-
-def getNumPresets(childDevice) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if ((childId != null) && (childId <= state.cameraPresets.size()) && state.cameraPresets[childId]) {
-    	return state.cameraPresets[childId].size()
-    }
-	return 0
-}
-
-
-def getPresetId(childDevice, index) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if ((childId != null) && (childId <= state.cameraPresets.size())) {
-    	if (index <= state.cameraPresets[childId]?.size()) {
-        	return state.cameraPresets[childId][index-1]?.id
-        }
-    } 
-    return null
-}
-
-def getPresetString(childDevice, index) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if ((childId != null) && (childId <= state.cameraPresets.size())) {
-    	if ((index > 0) && (index <= state.cameraPresets[childId]?.size())) {
-        	return state.cameraPresets[childId][index-1]?.name
-        }
-    } 
-    return "N/A"
-}
-
-def getPresetIdByString(childDevice, name) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if (state.cameraPresets[childId] != null) { 
-    	def preset = state.cameraPresets[childId].find { it.name.toString().equalsIgnoreCase(name.toString()) }
-        return preset?.id
-    }
-    return null
-}
-
-def getNumPatrols(childDevice) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if ((childId != null) && (childId <= state.cameraPatrols.size()) && state.cameraPatrols[childId]) {
-    	return state.cameraPatrols[childId].size()
-    }
-	return 0
-}
-
-def getPatrolId(childDevice, index) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if ((childId != null) && (childId <= state.cameraPatrols.size())) {
-    	if (index <= state.cameraPatrols[childId]?.size()) {
-        	return state.cameraPatrols[childId][index-1]?.id
-        }
-    } 
-    return null
-}
-
-def getPatrolString(childDevice, index) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if ((childId != null) && (childId <= state.cameraPatrols.size())) {
-    	if ((index > 0) && (index <= state.cameraPatrols[childId]?.size())) {
-        	return state.cameraPatrols[childId][index-1]?.name
-        }
-    }   
-    return "N/A"
-}
-
-def getPatrolIdByString(childDevice, name) {
-	def childId = getDSCameraIDbyChild(childDevice)
-    if (state.cameraPatrols[childId] != null) { 
-    	def patrol = state.cameraPatrols[childId].find { it.name.toString().equalsIgnoreCase(name.toString()) }
-        return patrol?.id
-    }
-    return null
-}
-
-import groovy.time.TimeCategory
-
-def refreshCamera(childDevice) {
-	// this is called by the child, let's just come back here in a second from the SmartApp instead so we have the right context
-    //runIn(8, "startPolling")
-    def timer = new Date()
-		use(TimeCategory) {
-    	timer = timer + 3.second
+	catch(Exception e) {
+		log.error e
+        sendEvent(name: "takeImage", value: "0")
 	}
-    runOnce(timer, "startPolling")
+    
+    def hubAction = null
+    def cameraId = getCameraID()
+    if ((takeStream != null) && (takeStream != "")){
+    	log.trace "take picture from camera ${cameraId} stream ${takeStream}"  
+    	hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.Camera", "GetSnapshot", "cameraId=${cameraId}&camStm=${takeStream}", 4)    
+    }
+    else { 
+    	log.trace "take picture from camera ${cameraId} default stream" 
+    	hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.Camera", "GetSnapshot", "cameraId=${cameraId}", 1)    
+    }
+    log.debug "take command is: ${hubAction}"
+    hubAction
 }
 
-def startPolling() {
-    state.refreshIterations = 0
-    pollChildren()
+def left() {
+	log.trace "move"    
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Move", "cameraId=${cameraId}&direction=left", 1)    
+    hubAction
 }
 
-def pollChildren(){    
-   	def children = getChildDevices() 
-    
-    children.each {
-        //log.trace "refreshState = " + getRefreshState(it)
-    
-        // step 2 - check if they are waiting to be told of their refresh
-        if (waitingRefresh(it) == true) {
-        	// waiting on refresh 
-            if  (state.commandList.size() == 0) {
-            	def childObj = it;
-                def thisCamera = state.SSCameraList.find { createCameraDNI(it).toString() == childObj.deviceNetworkId.toString() }
-                if (thisCamera) {
-                    it.doRefreshUpdate(state.cameraCapabilities[makeCameraModelKey(thisCamera)])
-                }
-            }
-        }
-        
-    	// step 1 - check if they are wanting to start a refresh
-        if (wantRefresh(it) == true) {
-			// do child refresh
-            def childObj = it;
-            def thisCamera = state.SSCameraList.find { createCameraDNI(it).toString() == childObj.deviceNetworkId.toString() }
-            if (thisCamera) {
-                updateCameraInfo(thisCamera)
-            }
-        }       
+def right() {
+	log.trace "move"    
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Move", "cameraId=${cameraId}&direction=right", 1)    
+    hubAction
+}
+
+def up() {
+	log.trace "move"
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Move", "cameraId=${cameraId}&direction=up", 1)    
+    hubAction
+}
+
+def down() {
+	log.trace "move"    
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Move", "cameraId=${cameraId}&direction=down", 1)    
+    hubAction
+}
+
+def zoomIn() {
+	log.trace "zoomIn"
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Zoom", "cameraId=${cameraId}&control=in", 1)    
+    hubAction
+}
+
+def zoomOut() {
+	log.trace "zoomOut"    
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Zoom", "cameraId=${cameraId}&control=out", 1)    
+    hubAction
+}
+
+def home() {
+	log.trace "home"    
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "Move", "cameraId=${cameraId}&direction=home", 1)     
+    hubAction
+}
+
+def presetup() {
+	log.trace "ps up"    
+    def maxPresetNum = device.currentState("numPresets")?.integerValue    
+    if (maxPresetNum > 0) {
+		def presetNum = state.curPresetIndex
+        presetNum = ((presetNum+1) <= maxPresetNum) ? (presetNum + 1) : 1
+        state.curPresetIndex = presetNum
+    	sendEvent(name: "curPreset", value: parent.getPresetString(this, presetNum))
+    } 
+}
+
+def presetdown() {
+	log.trace "ps down"    
+    def maxPresetNum = device.currentState("numPresets")?.integerValue    
+    if (maxPresetNum > 0) {
+		def presetNum = state.curPresetIndex
+        presetNum = ((presetNum-1) > 0) ? (presetNum - 1) : maxPresetNum
+        state.curPresetIndex = presetNum
+    	sendEvent(name: "curPreset", value: parent.getPresetString(this, presetNum))
+    } 
+}
+
+def presetgo() {
+	log.trace "ps go"    
+    def cameraId = getCameraID()
+    def presetIndex = state.curPresetIndex       
+    def presetNum = parent.getPresetId(this, presetIndex)
+    if (presetNum != null) {
+    	def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "GoPreset", "cameraId=${cameraId}&presetId=${presetNum}", 1)     
+    	return hubAction
     }
 }
 
-// parent checks this to say if we want a refresh
-def wantRefresh(child) {
-	def want = (child.currentState("refreshState")?.value == "want")
-    if (want) {
-    	child.doRefreshWait()	
+def presetGoName(name) {
+	log.trace "ps go name"  
+    def cameraId = getCameraID()     
+    def presetNum = parent.getPresetIdByString(this, name);
+    
+    if (presetNum != null) {
+    	def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "GoPreset", "cameraId=${cameraId}&presetId=${presetNum}", 1)     
+    	return hubAction
     }
-    return (want)
 }
 
-def getRefreshState(child) {
-	return (child.currentState("refreshState")?.value)
+def patroldown() {
+	log.trace "pt down"
+    def patrols = device.currentState("numPatrols")?.integerValue    
+    if (patrols > 0) {
+		def patrolNum = state.curPatrolIndex
+        patrolNum = ((patrolNum-1) > 0) ? (patrolNum - 1) : patrols
+        state.curPatrolIndex = patrolNum
+    	sendEvent(name: "curPatrol", value: parent.getPatrolString(this, patrolNum))
+    } 
 }
 
-def waitingRefresh(child) {
-	return (child.currentState("refreshState")?.value == "waiting")
+def patrolup() {
+	log.trace "pt up"
+    def patrols = device.currentState("numPatrols")?.integerValue    
+    if (patrols > 0) {
+		def patrolNum = state.curPatrolIndex 
+        patrolNum = ((patrolNum+1) <= patrols) ? (patrolNum + 1) : 1
+        state.curPatrolIndex = patrolNum
+    	sendEvent(name: "curPatrol", value: parent.getPatrolString(this, patrolNum))
+    } 
+}
+
+def patrolgo() {
+	log.trace "pt go"
+    def cameraId = getCameraID()
+    def patrolIndex = state.curPatrolIndex  
+    def patrolNum = parent.getPatrolId(this, patrolIndex)
+    if (patrolNum != null) {
+    	def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "RunPatrol", "cameraId=${cameraId}&patrolId=${patrolNum}", 2)     
+    	return hubAction
+    }
+}
+
+def patrolGoName(name) {
+	log.trace "pt go name"  
+    def cameraId = getCameraID()     
+    def patrolNum = parent.getPatrolIdByString(this, name);
+    
+    if (patrolNum != null) {
+    	def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.PTZ", "RunPatrol", "cameraId=${cameraId}&patrolId=${patrolNum}", 2)     
+    	return hubAction
+    }
+}
+
+def refresh() {
+	log.trace "refresh"
+    
+    // if we haven't hit refresh in longer than 10 seconds, we'll just start again
+    if ((device.currentState("refreshState")?.value == "none") 
+    	|| (state.refreshTime == null) || ((now() - state.refreshTime) > 30000)) {
+    	log.trace "refresh starting"
+    	sendEvent(name: "refreshState", value: "want")
+        state.refreshTime = now()        
+    	parent.refreshCamera(this)
+    }
+}
+
+// recording on / off
+def on() {
+	log.trace "start recording"
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.ExternalRecording", "Record", "cameraId=${cameraId}&action=start", 2)     
+    hubAction
+}
+
+def off() {
+	log.trace "stop recording"
+    def cameraId = getCameraID()
+    def hubAction = queueDiskstationCommand_Child("SYNO.SurveillanceStation.ExternalRecording", "Record", "cameraId=${cameraId}&action=stop", 2)
+    hubAction    
+}
+
+def recordEventFailure() {
+	if (device.currentState("switch")?.value == "on") {
+    	// recording didn't start, turn it off
+    	sendEvent(name: "switch", value: "off")
+    }
+}
+
+def motionActivated() {
+    if (device.currentState("motion")?.value != "active") {
+    	log.trace "activate"
+        sendEvent(name: "motion", value: "active")
+    } else {
+    	log.trace "motion detected, already active, not sending an event"
+    }
+}
+
+def motionDeactivate() {
+	log.trace "deactivate"
+	sendEvent(name: "motion", value: "inactive")
+}
+
+def autoTakeOn() {
+	log.trace "autoon"
+	sendEvent(name: "autoTake", value: "on")
+}
+
+def autoTakeOff() {
+	log.trace "autooff"
+	sendEvent(name: "autoTake", value: "off")
+}
+
+def doRefreshWait() {
+	sendEvent(name: "refreshState", value: "waiting")
+}
+
+def doRefreshUpdate(capabilities) {
+	initChild(capabilities)
+}
+
+def initChild(Map capabilities)
+{   
+   	sendEvent(name: "panSupported", value: (capabilities.ptzPan) ? "yes" : "no")
+    sendEvent(name: "tiltSupported", value: (capabilities.ptzTilt) ? "yes" : "no")
+    sendEvent(name: "zoomSupported", value: (capabilities.ptzZoom) ? "yes" : "no")
+    sendEvent(name: "homeSupported", value: (capabilities.ptzHome) ? "yes" : "no")    
+   	
+    sendEvent(name: "maxPresets", value: capabilities.ptzPresetNumber)
+    def numPresets = parent.getNumPresets(this).toString()
+    sendEvent(name: "numPresets", value: numPresets)
+    def curPreset = (numPresets == "0") ? 0 : 1
+    state.curPresetIndex = curPreset
+    sendEvent(name: "curPreset", value: parent.getPresetString(this, curPreset))
+    
+    def numPatrols = parent.getNumPatrols(this).toString()
+    sendEvent(name: "numPatrols", value: numPatrols)
+    def curPatrol = (numPatrols == "0") ? 0 : 1
+    state.curPatrolIndex = curPatrol
+    sendEvent(name: "curPatrol", value: parent.getPatrolString(this, curPatrol))
+    
+    sendEvent(name: "motion", value: "inactive")
+    sendEvent(name: "refreshState", value: "none")
+    if (device.currentState("autoTake")?.value == null) {
+    	sendEvent(name: "autoTake", value: "off")
+    }
+    
+    sendEvent(name: "takeImage", value: "0")
+}
+
+def queueDiskstationCommand_Child(String api, String command, String params, int version) {
+    def commandData = parent.createCommandData(api, command, params, version)
+    
+	log.trace "sending " + commandData.command
+    
+	def hubAction = parent.createHubAction(commandData)    
+	hubAction     
+}
+
+//helper methods
+private getPictureName() {
+    def lastNum = device.currentState("takeImage")?.integerValue ?: 0 
+	
+    Date rightNow = new Date()
+    def pictureDate = rightNow.toString().replaceAll(" ", "_").replaceAll(":", "")
+    
+    return device.deviceNetworkId.replaceAll(" ", "_") + "_$pictureDate" + "_" + lastNum + ".jpg"
 }
