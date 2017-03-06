@@ -27,6 +27,7 @@ metadata {
         capability "Polling"
         capability "Switch"
         capability "Contact Sensor"
+        capability "Sensor"
         
         command "generateEvent"
         command "setMotionModeAccel"
@@ -184,7 +185,8 @@ def getMotionDecay() {
 
 def updated() {
 	log.trace "updated"
-    parent.setMotionMode(this, device.currentState("motionMode")?.stringValue, getMotionDecay())
+    // AS - I have no idea why we'd do this. It messes everything up and times out the init on the parent
+    //parent.setMotionMode(this, device.currentState("motionMode")?.stringValue, getMotionDecay())
 }
 
 void generateEvent(Map results)
@@ -221,4 +223,3 @@ def getTemperature(value) {
 		return celsiusToFahrenheit(celsius) as Integer
 	}
 }
-
