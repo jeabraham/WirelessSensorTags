@@ -65,7 +65,8 @@ def handleUrlCallback () {
                 case "motion_detected": data = [acceleration: "active", motion: "active"]; startMotionTimer(d); break
                 
                 // motion timeout callback is not working currently in WST 
-                // case "motion_timedout": data = [acceleration: "inactive", motion: "inactive"]; break
+                // AS-seems to be fine as of 11/03/2016
+                case "motion_timedout": data = [acceleration: "inactive", motion: "inactive"]; break
                 
                 case "door_opened": data = [contact: "open"]; break
                 case "door_closed": data = [contact: "closed"]; break
@@ -178,6 +179,7 @@ def installed() {
 }
 
 def updated() {
+    log.trace "update"
 	unsubscribe()
 	initialize()
 }
@@ -199,6 +201,7 @@ def getChildName(def tagInfo) {
 
 def initialize() {
     
+    log.trace "initialize"
     unschedule()
     
 	def curDevices = devices.collect { dni ->
@@ -227,6 +230,7 @@ def initialize() {
 		return dni
 	}
 
+	log.trace "deleting unselected tags"
 	def delete
 	// Delete any that are no longer in settings
 	if(!curDevices)
@@ -242,14 +246,22 @@ def initialize() {
 
 	if (atomicState.tags == null) { atomicState.tags = [:] }
 
-	pollHandler()
+	// AS - this method takes so long, the pollHandler will never be called
+    // as the init times out with just 3 or 4 tags per instance.
+    // and a synchonous call to the pollHandler will definitely take too long
+    // we only have 30 seconds to get all the way through the init
+	//pollHandler()
     
     // set up internal poll timer
-	if (pollTimer == null) pollTimer = 5
+	//if (pollTimer == null) pollTimer = 5
 
-	log.trace "setting poll to ${pollTimer}"
-    schedule("0 0/${pollTimer.toInteger()} * * * ?", pollHandler)
+	///log.trace "setting poll to ${pollTimer}"
+    //schedule("0 0/${pollTimer.toInteger()} * * * ?", pollHandler)
+    
+    log.trace "scheduling polling"
+    runEvery5Minutes( pollHandler )
 }
+
 
 def oauthInitUrl()
 {
@@ -424,6 +436,8 @@ def pollSingle(def child) {
 
 def updateDeviceStatus(def device, def d) {
     def tagEventStates = getEventStates()
+    
+    log.trace device
 
     // parsing data here
     def data = [
@@ -436,7 +450,7 @@ def updateDeviceStatus(def device, def d) {
         humidity: (device.cap).toDouble().round(),
         contact : (tagEventStates[device.eventState] == "Opened") ? "open" : "closed",
         acceleration  : (tagEventStates[device.eventState] == "Moved") ? "active" : "inactive",
-        motion : (tagEventStates[device.eventState] == "Moved") ? "active" : "inactive",
+        motion : (tagEventStates[device.eventState] == "Detected") ? "active" : "inactive",
         water : (device.shorted == true) ? "wet" : "dry" 
     ]
     d.generateEvent(data)
@@ -446,6 +460,7 @@ def getPollRateMillis() { return 2 * 1000 }
 
 def getTagStatusFromServer()
 {	
+	log.trace "getTagStatusFromServer"
 	def timeSince = (atomicState.lastPoll != null) ? now() - atomicState.lastPoll : 1000*1000
     
     if ((atomicState.tags == null) || (timeSince > getPollRateMillis())) {
@@ -667,15 +682,22 @@ def light(def child, def on, def flash) {
 }
 
 def startMotionTimer(def child) {   
-	log.trace "start motion timer"
+	log.trace "start motion timer as a backup"
 
 	if (state.motionTimers == null) {
 		state.motionTimers = [:]
     }
     
-    def delayTime = child.getMotionDecay()
+    // AS - I added a longish time hardcoded here just for now.
+    // this is a fail safe
+    // there should be a separate setting for this.
+    //def delayTime = child.getMotionDecay() * 100
+    def delayTime = 60 * 30 // 30 minutes
+    log.trace "delayTime = " + delayTime
     
     // don't do less than a minute in this way, once WST has the callback working it will be better
+    // AS 2/25/17 - the inactive callback works now
+    // hence, we really don't want this. WST will not send a motion event if there is continuous motion.
     delayTime = (delayTime < 60) ? 60 : delayTime
     
     state.motionTimers[child.device.deviceNetworkId] = now() + delayTime
@@ -753,8 +775,11 @@ def disarmMotion(def child) {
 }
 
 
+// AS - I have no idea why the child called this on update
+// it messes up the closed positions of the tags.
+// there is no reason to think the doors are closed on update
 def setMotionMode(def child, def mode, def timeDelay) {
-	log.trace "setting door to closed"
+	log.trace "setMotionMode - setting door to closed???  why?"
         
 	def id = getTagID(child.device.deviceNetworkId)
     
