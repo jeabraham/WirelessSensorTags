@@ -71,7 +71,7 @@ metadata {
 			state "humidity", label:'${currentValue}% humidity', unit:""
 		}
 		valueTile("light", "device.light", inactiveLabel: false) {
-			state "light", label:'${currentValue}% light', unit:"lux", icon: "${resourcesUrl}light.png"
+			state "light", label:'${currentValue} lux', unit:""
 		}
 		valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
 			state "rssi", label:'${currentValue}% signal', unit:""
