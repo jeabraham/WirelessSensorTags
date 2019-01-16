@@ -20,6 +20,7 @@ metadata {
     capability "Motion Sensor"
 		capability "Tone"
 		capability "Relative Humidity Measurement"
+		capability "Illuminance Measurement"
 		capability "Temperature Measurement"
 		capability "Signal Strength"
 		capability "Battery"
@@ -69,6 +70,9 @@ metadata {
         valueTile("humidity", "device.humidity", inactiveLabel: false) {
 			state "humidity", label:'${currentValue}% humidity', unit:""
 		}
+		valueTile("light", "device.light", inactiveLabel: false) {
+			state "light", label:'${currentValue}% light', unit:"lux", icon: "${resourcesUrl}light.png"
+		}
 		valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
 			state "rssi", label:'${currentValue}% signal', unit:""
 		}
@@ -104,8 +108,8 @@ metadata {
 		valueTile("setdoorclosed", "device.temperature", inactiveLabel: false, decoration: "flat") {
 			state "default", label:'Arm & Set Door Closed Position', action:"setDoorClosedPosition", nextState: "default"
 		}
-		main(["temperature", "acceleration", "motion", "presence", "humidity", "contact"])
-		details(["temperature", "presence", "humidity", "acceleration", "motion", "contact", "button", "refresh", "type", "doorClosed", "setdoorclosed", "beep", "rssi", "battery"])
+		main(["temperature", "acceleration", "motion", "presence", "humidity", "contact", "light"])
+		details(["temperature", "presence", "humidity", "acceleration", "motion", "contact", "light", "button", "refresh", "type", "doorClosed", "setdoorclosed", "beep", "rssi", "battery"])
 	}
     
     preferences {
