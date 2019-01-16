@@ -262,7 +262,7 @@ def initialize() {
     //schedule("0 0/${pollTimer.toInteger()} * * * ?", pollHandler)
     
     log.trace "scheduling polling"
-    runEvery5Minutes( pollHandler )
+    runEvery1Minute( pollHandler )
 }
 
 
@@ -841,9 +841,9 @@ def getTagUUID(def id) {
 def getTagTypeInfo(def tag) {
 	Map tagInfo = [:]
 
-	tagInfo.isMsTag = (tag.tagType == 12 || tag.tagType == 13);
+	tagInfo.isMsTag = (tag.tagType == 12 || tag.tagType == 13 || tag.tagType == 26);
 	tagInfo.isMoistureTag = (tag.tagType == 32 || tag.tagType == 33);
-	tagInfo.hasBeeper = (tag.tagType == 13 || tag.tagType == 12);
+	tagInfo.hasBeeper = (tag.tagType == 13 || tag.tagType == 12 || tag.tagType == 26);
 	tagInfo.isReed = (tag.tagType == 52 || tag.tagType == 53);
 	tagInfo.isPIR = (tag.tagType == 72);
 	tagInfo.isKumostat = (tag.tagType == 62);
@@ -876,6 +876,9 @@ def convertTagTypeToString(def tag) {
         case 13:
         	tagString = "MotionHTU"
         	break;
+        case 26:
+        	tagString = "ALS"
+        	break;	    
         case 72:
         	tagString = "PIR"
             break;
