@@ -193,6 +193,9 @@ def getChildName(def tagInfo) {
             case 33:
                 deviceType = "Wireless Tag Water"
                 break;
+	    case 26:
+		deviceType = "Wireless Tag ALS"
+		break;
             // add new device types here
         }
     }
