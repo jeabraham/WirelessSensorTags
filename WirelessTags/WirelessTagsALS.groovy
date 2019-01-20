@@ -70,8 +70,8 @@ metadata {
         valueTile("humidity", "device.humidity", inactiveLabel: false) {
 			state "humidity", label:'${currentValue}% humidity', unit:""
 		}
-		valueTile("light", "device.light", inactiveLabel: false) {
-			state "light", label:'${currentValue} lux', unit:""
+		valueTile("illuminance", "device.light", inactiveLabel: false) {
+			state "illuminance", label:'${currentValue} lux', unit:""
 		}
 		valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
 			state "rssi", label:'${currentValue}% signal', unit:""
@@ -108,8 +108,8 @@ metadata {
 		valueTile("setdoorclosed", "device.temperature", inactiveLabel: false, decoration: "flat") {
 			state "default", label:'Arm & Set Door Closed Position', action:"setDoorClosedPosition", nextState: "default"
 		}
-		main(["temperature", "acceleration", "motion", "presence", "humidity", "contact", "light"])
-		details(["temperature", "presence", "humidity", "acceleration", "motion", "contact", "light", "button", "refresh", "type", "doorClosed", "setdoorclosed", "beep", "rssi", "battery"])
+		main(["temperature", "acceleration", "motion", "presence", "humidity", "contact", "illuminance"])
+		details(["temperature", "presence", "humidity", "acceleration", "motion", "contact", "illuminance", "button", "refresh", "type", "doorClosed", "setdoorclosed", "beep", "rssi", "battery"])
 	}
     
     preferences {
