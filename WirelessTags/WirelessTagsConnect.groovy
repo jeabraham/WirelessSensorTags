@@ -455,7 +455,7 @@ def updateDeviceStatus(def device, def d) {
         acceleration  : (tagEventStates[device.eventState] == "Moved") ? "active" : "inactive",
         motion : (tagEventStates[device.eventState] == "Detected") ? "active" : "inactive",
         water : (device.shorted == true) ? "wet" : "dry",
-	light: (device.lux).toDouble().round(1) 
+	illuminance: (device.lux).toDouble().round(1) 
     ]
     d.generateEvent(data)
 }
