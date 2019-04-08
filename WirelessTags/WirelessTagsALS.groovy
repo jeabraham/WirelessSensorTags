@@ -70,7 +70,7 @@ metadata {
         valueTile("humidity", "device.humidity", inactiveLabel: false) {
 			state "humidity", label:'${currentValue}% humidity', unit:""
 		}
-		valueTile("illuminance", "device.light", inactiveLabel: false) {
+		valueTile("illuminance", "device.illuminance", inactiveLabel: false) {
 			state "illuminance", label:'${currentValue} lux', unit:""
 		}
 		valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
