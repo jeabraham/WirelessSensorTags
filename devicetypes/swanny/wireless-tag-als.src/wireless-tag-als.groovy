@@ -14,7 +14,7 @@
  *
  */
 metadata {
-	definition (name: "Wireless Tag ALS", namespace: "CarlKaehler", author: "Carl Kaehler") {
+	definition (name: "Wireless Tag ALS", namespace: "swanny", author: "Carl Kaehler") {
 		capability "Presence Sensor"
 		capability "Acceleration Sensor"
     capability "Motion Sensor"
