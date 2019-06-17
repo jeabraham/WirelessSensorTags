@@ -1,0 +1,58 @@
+{
+    "namespace": "swanny",
+    "repoOwner": "Carl Kaehler",
+    "repoName": "WirelessSensorTags",
+    "repoBranch": "master",
+    "name": "Wireless Sensor Tags",
+    "author": "Carl Kaehler",
+    "description": "",
+    "category": "My Apps",
+    "bannerUrl": "",
+    "forumUrl": "",
+    "docUrl": "",
+    "releaseType": "production",
+    "keywords": [""],
+    "notes": "Nothing to show here (yet)",
+    "smartApps": {
+        "parent": {
+            "name": "Wireless Tags Connect",
+            "iconUrl": "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
+            "published": true,
+            "oAuth": true,
+            "appSettings": {},
+            "version": "0.0.1",
+            "appUrl": "smartapps/swanny/wireless-tags-connect.src/wireless-tags-connect.groovy"
+        }
+    },
+    "deviceHandlers": [{
+            "name": "Wireless Tag ALS",
+            "iconUrl": "",
+            "published": true,
+            "oAuth": false,
+            "appUrl": "devicetypes/swanny/wireless-tag-als.src/wireless-tag-als.groovy",
+            "appSettings": {},
+            "version": "0.0.1",
+            "optional": true
+        },
+        {
+            "name": "Wireless Tag Motion",
+            "iconUrl": "",
+            "published": true,
+            "oAuth": false,
+            "appUrl": "devicetypes/swanny/wireless-tag-motion.src/wireless-tag-motion.groovy",
+            "appSettings": {},
+            "version": "0.0.1",
+            "optional": true
+        },
+        {
+            "name": "Wireless Tag Water",
+            "iconUrl": "",
+            "published": true,
+            "oAuth": false,
+            "appUrl": "devicetypes/swanny/wireless-tag-als.src/wireless-tag-water.groovy",
+            "appSettings": {},
+            "version": "0.0.1",
+            "optional": true
+        }
+    ]
+}
